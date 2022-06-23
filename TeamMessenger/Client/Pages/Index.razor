@@ -1,0 +1,317 @@
+﻿@page "/"
+@using System.Security.Cryptography;
+@using TeamMessenger.Shared.Cryptography;
+@using System.Globalization
+@inject IStringLocalizer<Localization> Loc
+@inject NavigationManager navigationManager
+@using TeamMessenger.Shared.Messages
+@using Microsoft.AspNetCore.SignalR.Client;
+@using Org.BouncyCastle.Crypto;
+@using Org.BouncyCastle.Crypto.Generators
+@using Org.BouncyCastle.Crypto.Parameters
+@using Org.BouncyCastle.Pkcs;
+@using Org.BouncyCastle.Security
+@using Org.BouncyCastle.X509
+
+<PageTitle>@Loc["MessageExchange"]</PageTitle>
+
+<h1>@Loc["MessageExchange"]</h1>
+
+<h2 style="color:red;">@Loc["OnlyForDemonstration"]</h2>
+
+<p>
+    @Loc["GroupSecret"]:
+    <input @bind="GroupSecret" /> <button class="btn btn-primary" @onclick="GenerateGroupSecret">@Loc["CreateNewGroupSecret"]</button>
+</p>
+<p>
+    @Loc["GroupId"]:
+    @GroupId
+</p>
+<p>
+    @Loc["PersonalSecret"]:
+    <input @bind="PersonalSecret" /> <button class="btn btn-primary" @onclick="GeneratePersonalSecret">@Loc["CreateNewPersonalSecret"]</button>
+</p>
+<p>
+    @Loc["PublicKey"]:
+    @PersonalPublicKey
+</p>
+
+@if (!IsConnected)
+{
+    <p>
+        @Loc["Username"]:
+    </p>
+
+    <input type="text" maxlength="32" @bind="@Username" />
+    <button type="button" @onclick="@Chat"><span class="oi oi-chat" aria-hidden="true"></span> @Loc["Connect"]</button>
+    <p>
+        @Loc["AcceptTOS1"]<a href="javascript:;" @onclick="@ToggleTOS">@Loc["AcceptTOS2"]</a>.
+    </p>
+    @if (ShowTOS)
+    {
+        <p>@Loc["TOS"]</p>
+    }
+
+    @if (InfoMessage != null)
+    {
+        <div class="invalid-feedback">@InfoMessage</div>
+        <small id="emailHelp" class="form-text text-muted">@InfoMessage</small>
+    }
+}
+else
+{
+    <div class="alert alert-secondary mt-4" role="alert">
+        <span class="oi oi-person mr-2" aria-hidden="true"></span>
+        <span>@Loc["ConnectedAs"] <b>@Username</b></span>
+        <button class="btn btn-sm btn-warning ml-md-auto" @onclick="@DisconnectAsync">@Loc["Disconnect"]</button>
+    </div>
+    <div id="scrollbox">
+        @foreach (var item in Messages)
+        {
+            @if (!item.Verify() || PersonalPublicKeyBytes == null || GroupSecretBytes == null || item.DecryptMessage(GroupSecretBytes) == null)
+            {
+                <div class="alert alert-info">@Loc["CorruptedMessage"]</div>
+            }
+            else
+            {
+                <div class="@(item.PublicKey.SequenceEqual(PersonalPublicKeyBytes)?"sent":"received")">
+                    <div class="user">@($"{item.Username} ({Convert.ToBase64String(SHA(item.PublicKey))})")</div>
+                    <div class="msg">@item.DecryptMessage(GroupSecretBytes)</div>
+                </div>
+            }
+        }
+        <hr />
+        <textarea class="input-lg" placeholder="@Loc["EnterMessage"]" @bind="@InputMessage"></textarea>
+        <button class="btn btn-primary" @onclick="@(() => SendAsync(InputMessage))">@Loc["Send"]</button>
+    </div>
+}
+
+
+@code
+{
+    private bool ShowTOS { get; set; } = false;
+    private void ToggleTOS() => ShowTOS = !ShowTOS;
+
+    private string? GroupSecret
+    {
+        get => GroupSecretBytes != null ? Convert.ToBase64String(GroupSecretBytes) : null;
+        set
+        {
+            try
+            {
+                GroupSecretBytes = value != null ? Convert.FromBase64String(value) : null;
+            } catch
+            {
+                GroupSecretBytes = null;
+            }
+        }
+    }
+    private byte[]? GroupSecretBytes { get; set; }
+    private string? GroupId { get => GroupIdBytes != null ? Convert.ToBase64String(GroupIdBytes) : null; }
+    private byte[]? GroupIdBytes
+    {
+        get
+        {
+            if (GroupSecretBytes == null)
+                return null;
+            using (SHA256 sha = SHA256.Create())
+                return sha.ComputeHash(GroupSecretBytes);
+        }
+    }
+
+    /// <summary>
+    /// Создание нового ключа группы
+    /// </summary>
+    private void GenerateGroupSecret()
+    {
+        using TeamMessenger.Shared.Cryptography.Rijndael aes = new TeamMessenger.Shared.Cryptography.RijndaelManaged();
+        // Выбор максимального допустимого размера ключа для алгоритма
+        int keySize = aes.LegalKeySizes.Max(x => x.MaxSize);
+        // Получение случайных байтов с помощью криптографически стойкого алгоритма
+        GroupSecretBytes = RandomNumberGenerator.GetBytes(keySize / 8);
+    }
+
+    private string? PersonalSecret
+    {
+        get => PersonalSecretBytes != null ? Convert.ToBase64String(PersonalSecretBytes) : null;
+        set
+        {
+            try
+            {
+                PersonalSecretBytes = value != null ? Convert.FromBase64String(value) : null;
+            } catch
+            {
+                PersonalSecretBytes = null;
+            }
+        }
+    }
+    private byte[]? PersonalSecretBytes
+    {
+        get => _PersonalSecretBytes;
+        set
+        {
+            _PersonalSecretBytes = value;
+            if (PersonalSecretBytes == null || PersonalSecretBytes.Length == 0)
+            {
+                PersonalPublicKeyBytes = new byte[0];
+                return;
+            }
+            var privateKey = PrivateKeyFactory.CreateKey(PersonalSecretBytes) as ECPrivateKeyParameters;
+            if (privateKey == null)
+            {
+                PersonalPublicKeyBytes = new byte[0];
+                return;
+            }
+            Org.BouncyCastle.Math.EC.ECPoint q = privateKey.Parameters.G.Multiply(privateKey.D);
+            var publicParams = new ECPublicKeyParameters(privateKey.AlgorithmName, q, privateKey.PublicKeyParamSet);
+            PersonalPublicKeyBytes = SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(publicParams).GetEncoded();
+        }
+    }
+    private byte[]? _PersonalSecretBytes;
+    private string? PersonalPublicKey { get => PersonalPublicKeyBytes != null ? Convert.ToBase64String(PersonalPublicKeyBytes) : null; }
+    private byte[]? PersonalPublicKeyBytes { get; set; }
+
+    /// <summary>
+    /// Создание нового личного ключа
+    /// </summary>
+    private void GeneratePersonalSecret()
+    {
+        // Получение случайных байтов с помощью криптографически стойкого алгоритма в количестве, допустимым для использования алгоритмом в качестве ключа
+        var oid = Org.BouncyCastle.Asn1.X9.X962NamedCurves.GetOid("prime256v1");
+        SecureRandom random = new SecureRandom();
+
+        ECKeyPairGenerator generator = new Org.BouncyCastle.Crypto.Generators.ECKeyPairGenerator("ECDSA");
+        generator.Init(new ECKeyGenerationParameters(oid, random));
+        AsymmetricCipherKeyPair? keyPair = generator.GenerateKeyPair();
+        _PersonalSecretBytes = PrivateKeyInfoFactory.CreatePrivateKeyInfo(keyPair.Private).GetEncoded();
+        PersonalPublicKeyBytes = SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(keyPair.Public).GetEncoded();
+    }
+
+    /// <summary>
+    /// Статус подключения
+    /// </summary>
+    private bool IsConnected => HubConnection != null && HubConnection.State != HubConnectionState.Disconnected;
+
+    /// <summary>
+    /// Имя пользователя
+    /// </summary>
+    private string Username = string.Empty;
+
+    /// <summary>
+    /// Информационное сообщение
+    /// </summary>
+    private string InfoMessage = string.Empty;
+
+    /// <summary>
+    /// Набираемое пользователем сообщение
+    /// </summary>
+    private string InputMessage = string.Empty;
+
+    /// <summary>
+    /// Список сообщений
+    /// </summary>
+    private List<Message> Messages = new List<Message>();
+
+    private string HubUrl = string.Empty;
+    private HubConnection? HubConnection;
+
+    private byte[]? LastSignature;
+
+    public async Task Chat()
+    {
+        if (PersonalPublicKeyBytes == null || PersonalSecretBytes == null)
+        {
+            InfoMessage = Loc["NoPersonalKey"];
+            return;
+        }
+        if (GroupIdBytes == null || GroupSecretBytes == null)
+        {
+            InfoMessage = Loc["NoGroupKey"];
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(Username))
+        {
+            InfoMessage = Loc["NoUsername"];
+            return;
+        }
+
+        try
+        {
+            Messages.Clear();
+
+            string baseUrl = navigationManager.BaseUri;
+
+            HubUrl = baseUrl.TrimEnd('/') + TeamMessenger.Shared.Chat.HubUrl;
+
+            HubConnection = new HubConnectionBuilder()
+                .WithUrl(HubUrl)
+                .Build();
+
+            HubConnection.On<Message>("Broadcast", BroadcastMessage);
+
+            await HubConnection.StartAsync();
+
+            // Подписание данных для авторизации
+            byte[] signature = TeamMessenger.Shared.Cryptography.Signature.SignData(System.Text.UnicodeEncoding.Unicode.GetBytes(HubConnection.ConnectionId + Username).Concat(GroupIdBytes).ToArray(), PersonalSecretBytes);
+            // Обновление последней подписи
+            LastSignature = signature;
+
+            // Отправка сообщения авторизации
+            await HubConnection.SendAsync("Login", Username, PersonalPublicKeyBytes, GroupId, signature);
+        }
+        catch (Exception e)
+        {
+            InfoMessage = $"ERROR: {e.Message}";
+            if (HubConnection != null && HubConnection.State != HubConnectionState.Disconnected)
+                await HubConnection.DisposeAsync();
+        }
+    }
+
+    private void BroadcastMessage(Message message)
+    {
+        // Если существует сообщение от того же отправителя, проставляется его подпись как последняя
+        Message? lastMessage = Messages.LastOrDefault(x => x.PublicKey.SequenceEqual(message.PublicKey) && x.Username == message.Username && x.ConnectionId == message.ConnectionId);
+        if (lastMessage != null && lastMessage.Signature != null)
+            message.LastSignature = lastMessage.Signature;
+
+        Messages.Add(message);
+
+        StateHasChanged();
+    }
+
+    private async Task DisconnectAsync()
+    {
+        if (IsConnected)
+        {
+            await HubConnection.StopAsync();
+            await HubConnection.DisposeAsync();
+
+            HubConnection = null;
+        }
+    }
+
+    private async Task SendAsync(string message)
+    {
+        if (IsConnected && HubConnection?.State == HubConnectionState.Connected && !string.IsNullOrWhiteSpace(message) && PersonalSecretBytes != null && PersonalPublicKeyBytes != null && GroupSecretBytes != null && GroupIdBytes != null && LastSignature != null)
+        {
+            Message msg = new Message(HubConnection.ConnectionId ?? string.Empty, Username, PersonalPublicKeyBytes, GroupIdBytes, LastSignature);
+            msg.EncryptAndSign(message, PersonalSecretBytes, GroupSecretBytes);
+            if (msg.DecryptMessage(GroupSecretBytes) == null)
+                Console.WriteLine("Failed to decrypt");
+            PackedMessage? packed = msg.Pack();
+            if (packed != null)
+            {
+                await HubConnection.SendAsync("Broadcast", (PackedMessage)packed);
+                LastSignature = msg.Signature;
+
+                InputMessage = string.Empty;
+            }
+        }
+    }
+
+    private byte[] SHA(byte[] input)
+    {
+        using (SHA256 sha = SHA256.Create())
+            return sha.ComputeHash(input);
+    }
+}

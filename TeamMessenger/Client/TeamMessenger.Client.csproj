@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="6.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="6.0.1" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="6.0.4" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Core" Version="1.1.0" />
+    <PackageReference Include="Microsoft.Extensions.Localization" Version="6.0.4" />
+    <PackageReference Include="Portable.BouncyCastle" Version="1.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Shared\TeamMessenger.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="Shared\Localization.ru.Designer.cs">
+      <DependentUpon>Localization.ru.resx</DependentUpon>
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+    </Compile>
+    <Compile Update="Shared\Localization.Designer.cs">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Localization.resx</DependentUpon>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Update="Shared\Localization.ru.resx">
+      <SubType>Designer</SubType>
+      <LastGenOutput>Localization.ru.Designer.cs</LastGenOutput>
+      <Generator>PublicResXFileCodeGenerator</Generator>
+    </EmbeddedResource>
+    <EmbeddedResource Update="Shared\Localization.resx">
+      <Generator>PublicResXFileCodeGenerator</Generator>
+      <LastGenOutput>Localization.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>
